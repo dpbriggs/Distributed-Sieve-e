@@ -4,84 +4,65 @@
             [clojure.core.async :refer [go-loop chan <!! >!!
                                         go alt!! alt! timeout
                                         <! >!]]
-            [com.tbaldridge.hermod :refer :all]))
-; Home box is the mailbox that recieves generic information
-(def home-box (mailbox :home))
-; Generic mailbox for all heart beat request (is sorted later)
-(def heart-beat (mailbox :heart-beat))
-; list of connected clients
-(def connected-clients (atom {}))
-; reasonably unique name
+            [com.tbaldridge.hermod :refer :all]
+            [sieve.core :as s]))
+
 (def my-name (-> (System/currentTimeMillis)
                  (- (rand-int 100000000))
                  String/valueOf
                  keyword))
 
-; port that this program will work on
-(def my-port 4111)
+;;;;;;;;;;;
+;; All followers that are not lead have two mailboxes, sieve and etc
+;; sieve only deals with sieve related business (mi cs p ps)
+;; etc is for all other purposes (starting sieve, sending results, etc)
 
-(defn ping-mailbox [port]
+;; TODO: Get start-follower function working (recieving client list)
+
+(def connected-clients (atom []))
+
+(def etc (mailbox :etc))
+
+(def sieve (mailbox :sieve 8096))
+
+(defn send-to-all
+  [box msg]
+  (map #(>!! (box %) msg) @connected-clients))
+
+(def connected-clients-follower (atom []))
+
+(defn start-follower
+  [lead-host lead-port]
+  (let [lead-rbx   (remote-mailbox lead-host lead-port :lead)
+        lead-sieve (remote-mailbox lead-host lead-port :sieve)
+        lead-etc   (remote-mailbox lead-host lead-port :etc)]
+    (>!! lead-rbx {:etc   etc
+                   :sieve sieve})
+    (println "Waiting for all other clients to connect")
+    (when-let [clients-list (<!! etc)]
+      (swap! connected-clients-follower (fn [n] clients-list)))
+    {:lead lead-rbx
+     :sieve lead-sieve
+     :lead-etc lead-etc}))
+
+(defn start-leader
+  [port expected-number]
   (listen port)
   (go
-   (with-open [m (mailbox :ping)]
-     (loop []
-       (when-let [{:keys [return-to msg]} (<! m)]
-         (>! return-to msg)
-         (recur))))))
-
-(defn send-to
-  "Sends "
-  [rbx key msg]
-  (>!! rbx {:return-to home-box
-            key msg}))
-
-(defn connect
-  [host port]
-  (let [unique-id   (System/currentTimeMillis) ; generate unique id to make mail boxes
-        rbx-home    (remote-mailbox host port :home) ; connect to their home box
-        rbx-ping    (remote-mailbox host port :heart-beat) ; connect to their ping box
-        lbx-home    (mailbox unique-id)
-        lbx-ping    (mailbox (inc unique-id)) ; make a local box to recieve pings
-        rbx-connect (remote-mailbox host port unique-id) ; shit mailbox to get a name
-        _           (>!! rbx-connect my-name) ; Send them my-name
-        rbx-name    (<!! lbx-home)         ; recieve their name
-        client      {:rbx-ping rbx-ping
-                     :rbx-home rbx-home
-                     :lbx-ping lbx-ping
-                     :lbx-home lbx-home}]
-    (swap! connected-clients assoc rbx-name client)
-    client))
-
-; Vector of potentially dead clients
-(def dead-clients (atom #{}))
-
-(defn pong
-  "handles dumb ping requests"
-  []
-  (go-loop []
-    ; sort the ping request into the correct local ping mailbox
-    (when-let [id (<! heart-beat)]
-      (let [client (:lbx-ping (id @connected-clients))]
-        (>! client 0)))
-    (recur)))
-
-(defn ping
-  "Handles pinging service"
-  []
-  ; current --> current clients at time of ping cycle
-  (go-loop [current @connected-clients]
-    (for [i current]
-      (go
-        (let [rbx-ping (:rbx-ping (first (vals i)))
-              lbx-ping (:lbx-ping (first (vals i)))
-              id       (first (keys i))]
-          (>! rbx-ping id)
-          (alt! [lbx-ping] (print "im really dumb")  ; do nothing
-                ; otherwise add to list of dead clients
-                [(timeout 30000)] (swap! dead-clients conj id)))))
-    ; Send a ping request every 10 seconds
-    (<! (timeout 10000))
-    (recur [@connected-clients])))
+    (let [lead (mailbox :lead)]
+      ; Add myself to the connected client list
+      (swap! connected-clients conj {:lead  lead
+                                     :sieve sieve
+                                     :etc   etc})
+      (loop []
+        (when (< (count @connected-clients) expected-number)
+          (when-let [{:keys [etc sieve]} (<! lead)]
+            (println "Someone Connected!")
+            (swap! connected-clients conj {:sieve sieve
+                                           :etc   etc})
+            (recur))))
+      (send-to-all :etc connected-clients)
+      (println "made it here"))))
 
 (deftest ping-test
   ;; Only used during testing to make sure we have a clean state, you shouldn't
