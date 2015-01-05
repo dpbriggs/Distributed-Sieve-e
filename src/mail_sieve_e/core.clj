@@ -70,7 +70,7 @@
   (restart-selector!)
 
   ;; Create a local box with a known name, and wire up a echo service
-  (ping-mailbox 4242)
+  ;(ping-mailbox 4242)
 
 
   ;; Create a pointer to the :ping-box
