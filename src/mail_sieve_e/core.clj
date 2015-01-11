@@ -1,93 +1,147 @@
 (ns mail-sieve-e.core
   (:gen-class)
   (:require [clojure.test :refer :all]
-            [clojure.core.async :refer [go-loop chan <!! >!!
+            [clojure.core.async :as a :refer [go-loop chan <!! >!!
                                         go alt!! alt! timeout
                                         <! >!]]
-            [com.tbaldridge.hermod :refer :all]
-            [sieve.core :as s]))
+            [com.gearswithingears.async-sockets :refer :all]
+            [mail-sieve-e.sieve :as s]
+            [clojure.java.io :as io])
+  (:import [java.net Socket ServerSocket]
+           [java.io PrintWriter InputStreamReader BufferedReader]))
 
-(def my-name (-> (System/currentTimeMillis)
-                 (- (rand-int 100000000))
-                 String/valueOf
-                 keyword))
+(declare read-handler write-handler)
 
-;;;;;;;;;;;
-;; All followers that are not lead have two mailboxes, sieve and etc
-;; sieve only deals with sieve related business (mi cs p ps)
-;; etc is for all other purposes (starting sieve, sending results, etc)
+(defn connect
+  [server port]
+  (let [socket (Socket. server port)
+        in (read-handler (BufferedReader. (InputStreamReader.(.getInputStream socket))))
+        out (write-handler (PrintWriter. (.getOutputStream socket)))]
+    {:socket socket
+     :in in
+     :out out}))
 
-;; TODO: Get start-follower function working (recieving client list)
 
-(def connected-clients (atom []))
+(defn receive
+  "Read a line of textual data from the given socket"
+  [socket]
+  (.readLine (io/reader socket)))
 
-(def etc (mailbox :etc))
-
-(def sieve (mailbox :sieve 8096))
+(defn write
+  "Send the given string message out over the given socket"
+  [socket msg]
+  (let [writer (io/writer socket)]
+    (.write writer (str msg "\n"))
+    (.flush writer)))
 
 (defn send-to-all
-  [box msg]
-  (map #(>!! (box %) msg) @connected-clients))
+  [connected msg]
+  (doall
+   (map #(write % msg) @connected)))
 
-(def connected-clients-follower (atom []))
+(defn read-handler
+  [socket]
+  (let [read-chan (chan 1000000000)
+        reader (io/reader socket)]
+    (go-loop []
+      (>!! read-chan (.readLine reader))
+      (recur))
+    read-chan))
 
-(defn start-follower
-  [lead-host lead-port]
-  (let [lead-rbx   (remote-mailbox lead-host lead-port :lead)
-        lead-sieve (remote-mailbox lead-host lead-port :sieve)
-        lead-etc   (remote-mailbox lead-host lead-port :etc)]
-    (>!! lead-rbx {:etc   etc
-                   :sieve sieve})
-    (println "Waiting for all other clients to connect")
-    (when-let [clients-list (<!! etc)]
-      (swap! connected-clients-follower (fn [n] clients-list)))
-    {:lead lead-rbx
-     :sieve lead-sieve
-     :lead-etc lead-etc}))
+(defn write-handler
+  [socket]
+  (let [write-chan (chan 10000000000)
+        writer (io/writer socket)]
+    (go-loop []
+      (when-let [msg (<! write-chan)]
+        (do
+          (.write writer (str msg "\n"))
+          (.flush writer))
+        (recur)))
+    write-chan))
 
-(defn start-leader
-  [port expected-number]
-  (listen port)
-  (go
-    (let [lead (mailbox :lead)]
-      ; Add myself to the connected client list
-      (swap! connected-clients conj {:lead  lead
-                                     :sieve sieve
-                                     :etc   etc})
-      (loop []
-        (when (< (count @connected-clients) expected-number)
-          (when-let [{:keys [etc sieve]} (<! lead)]
-            (println "Someone Connected!")
-            (swap! connected-clients conj {:sieve sieve
-                                           :etc   etc})
-            (recur))))
-      (send-to-all :etc connected-clients)
-      (println "made it here"))))
+(defn echo-server
+  [port handler]
+  (with-open [server-sock (ServerSocket. port)
+              sock (.accept server-sock)]
+    (let [msg-in  (receive sock)
+          msg-out (handler msg-in)]
+      (write sock msg-out))))
 
-(deftest ping-test
-  ;; Only used during testing to make sure we have a clean state, you shouldn't
-  ;; need to do this in normal use cases.
-  (restart-selector!)
+(defn async-echo-server
+  "Takes: port      - port number
+          handler   - a function that takes msgs from connected clients
+          send-chan - A channel to immediately send information"
+  [port handler send-chan]
+  (let [running? (atom true)
+        connected (atom [])
+        server-socket (ServerSocket. port)]
+    (go
+      (while @running?
+        (when-let [sock (.accept server-socket)]
+          (swap! connected conj sock)
+          (let [client-in (read-handler sock)]
+            (go-loop []
+              (if @running?
+                (do
+                  (alt! [client-in] ([msg] (write sock (handler msg)))
+                        [send-chan] ([msg] (send-to-all connected msg)))
+                  (recur))
+                (.close sock)))))))
+    (go-loop []
+      (when-not running?
+        (.close server-socket))
+      (recur))
+    {:server-socket server-socket
+     :running running?
+     :connected connected}))
 
-  ;; Create a local box with a known name, and wire up a echo service
-  ;(ping-mailbox 4242)
+(defn wait-for-clients
+  [num-expected connected]
+  ; First, wait for all computers to join
+  (println "Waiting for computers to join...")
+  (while (not= (count @connected) num-expected)
+    (Thread/sleep 500)
+    (println "# Connected: " (count @connected))))
+
+(defn transfer-primes
+  "All machines send lead their primes vector,
+  and lead must send these to the right computers."
+  [connections]
+  (let [in-stream (a/merge (mapv :out @connections))
+        comps @connections]
+    (go-loop []
+      (when-let [prime-vec (<! in-stream)]
+        (let [[mi ps p] (read-string prime-vec)
+              r-comps (drop mi comps)] ; respective computers
+          (doall
+           (map #(write % prime-vec) r-comps)))
+        (recur)))))
+
+(defn lead-start
+  [num-expected port num-primes]
+  (let [send-chan (chan 10000000)
+        server    (async-echo-server port #(.toUpperCase %) send-chan)
+        connected (:connected server)
+        ; Wait for connected clients
+        _         (wait-for-clients num-expected connected)
+        __        (transfer-primes connected)]
+    ; TODO
+    ; Since appoint message is sent to all respective comps, fix that.
+    ; Finish rest of this function
 
 
-  ;; Create a pointer to the :ping-box
-  (let [rbx (remote-mailbox "localhost" 4242 :ping)]
 
-    ;; Create a response box
-    (with-open [lbx (mailbox)]
-      (dotimes [x 100]
-        ;; Send to the remote box and wait for the reply. In a request/response
-        ;; situation, like this, we will alt on a timeout and throw an exception
-        ;; if the message is dropped. We could also resend and wait again.
-        (>!! rbx {:return-to lbx
-                  :msg :a})
-        (alt!! [lbx] ([v] (print (keyword? v)))
-               [(timeout 1000)] (assert false "Timeout after 1000 ms"))))))
+
+    ;Now, make the reader channel
+
+    ))
 
 (defn -main
   "I don't do a whole lot ... yet."
-  [& args]
-  (println "Hello, World!"))
+  ([]
+   (time (s/dis-sieve-e 4 1000000))
+   (read-line))
+  ([num-comps num & args]
+   (time (s/dis-sieve-e (Integer. num-comps) (Integer. num)))
+   (read-line)))

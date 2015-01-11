@@ -1,10 +1,11 @@
-(ns sieve.core
+(ns mail-sieve-e.sieve
   (:gen-class)
-  (:require [clojure.core.async :refer [>!! <!! chan thread]]
-            [clojure.java.io :refer [writer]]
+  (:require [clojure.core.async :refer [>!! <!! chan thread go]]
             [clojure.string :refer [join]])
   (:import [java.io FileWriter]))
 
+
+;; TODO: Fix follower sieve-e
 (def chunk-size (atom 0))
 
 (def comp-num (atom 0))
@@ -43,7 +44,7 @@
   [mi cs ps p]
   (let [k (+ ps (* cs (dec mi)))] ; chunk adjustment
     (for [i (drop 1 (range))]
-      (+ k (* i p)))))
+      (+ k (* i (.intValue p))))))
 
 (defn mark-composites
   "Takes mi     - reporting machine number
@@ -54,13 +55,11 @@
          coll   - transient collection to mark indices
    Applies sieve marking step to prime chunk"
   [mi cs ps p my-num coll]
-  (let [;early-indices (- (Math/floorDiv (* my-num cs) p) 2)
-        to-mark       (drop 0 (indices mi cs ps p))
+  (let [_ (when (zero? p) (println "p: " p "ps: 0" "mi: " mi "coll: " (take 20 (persistent! coll))))
+        early-indices (* (dec my-num) (Math/floor (/ (- cs ps) p)))
+        to-mark       (drop early-indices (indices mi cs ps p))
         lower-bound   (* (dec my-num) cs)
-        upper-bound   (dec (* my-num cs))
-        _             (println "% " (take 5 to-mark))
-        __            (println "lower: " lower-bound)
-        ___           (println "upper: " upper-bound)]
+        upper-bound   (dec (* my-num cs))]
     (loop [head (first to-mark)
            tail (rest to-mark)]
       ; Ensure indice is within upper-bound
@@ -84,7 +83,7 @@
         (recur (inc stop))))))
 
 (defn finish
-  [raw-chunk]
+  [raw-chunk my-num]
   (println "Writing primes to file...")
   (let [chunk (persistent! raw-chunk)]
     (when (= 3 (first chunk))
@@ -96,7 +95,7 @@
       (assoc chunk 1 3)
       (assoc chunk 0 2))
     (let [new-line (System/getProperty "line.separator")
-          file-name (str (System/getProperty "user.home") "/primes.txt")
+          file-name (str (System/getProperty "user.home") "/primes" my-num ".txt")
           filtered-chunk (filter #(not (zero? %)) chunk)
           primes (partition-all 10 filtered-chunk)]
       (with-open [w (FileWriter. file-name)]
@@ -104,7 +103,15 @@
          (for [i primes]
            (.write w (str (clojure.string/join ", " i) new-line)))))
       (println "Done!")
-      (println "Primes saved in:" file-name))))
+      (println "Primes saved in:" file-name)
+      (println ""))))
+
+(defn find-first-prime
+  [coll cs]
+  (if-not (zero? (get coll 0))
+    0
+    ; start = -1 as we increment start in the function making it 0
+    (find-next-non-zero coll -1 cs)))
 
 (defn sieve-e
   "Parallel sieve of eratosthenes
@@ -114,19 +121,22 @@
          in-channel  - Merged channel of all messages sent to this machine
          chunk-in    - If there's a previously made chunk, pass it.
          & clients   - list of connected clients"
-  [my-num lead? in-channel chunk [& clients]]
-  (let [cs    (count chunk)]
+  [my-num lead? in-channel chunk [& clients] debug]
+  (>!! debug "hiq")
+  (println "Generating chunk...")
+  (let [cs (count chunk)]
+    (println "Starting Sieve...")
     (if lead?
-      (loop [start 0]
+      (loop [start (find-first-prime chunk cs)]
         ; Lead logic
         (let [prime (get chunk start)
               n-start (find-next-non-zero chunk start cs)]
           (if-not (nil? n-start)
             ; if n-start is nil, we've run out of primes.
             (do
-              (println "start: " start)
+              ;(println "start: " start)
               ; Send prime to connected clients
-              (map #(>!! % [my-num start prime]) clients)
+              (doall (map #(>!! % [my-num start prime]) clients))
               ; Mark the primes
               (mark-composites my-num cs start prime my-num chunk)
               ; Complete the step.
@@ -134,24 +144,49 @@
             ; If nil, I need to finish and elect new lead
             (do
               ;Appoint the next machine as lead.
-              (println "appoint " (inc my-num) " as next machine (TODO)")
+              (println "appointing " (inc my-num) " as next machine.")
+              (>!! (first clients) [my-num -1 0])
               ; Then finish the sieve
-              (finish chunk)))))
+              (finish chunk my-num)))))
       ; Follower logic
-      (loop []
-        ; Wait for other machines to give num
-        (when-let [[mi ps p] (<!! in-channel)]
-         ; when mi = -1, that's the election code.
-         ; ps --> start
-         ; p  --> prime
-          (if-not (= mi -1)
-            ; If we're not being appointed...
-            (do
-              ; Mark composite numbers
-              (mark-composites mi cs ps p my-num chunk)
-              ; Finish follower step
-              (recur))
-            ; If we're being appointed...
-            (do
-              (println "Appointed new lead.")
-              (thread (sieve-e my-num true chunk clients)))))))))
+      (do
+        (println "Following lead computer...")
+        (>!! debug "following")
+        (loop []
+          ; Wait for other machines to give num
+          (when-let [[mi ps p] (<!! in-channel)]
+            ; when mi = -1, that's the code to appoint this machine as lead.
+            ; ps --> start
+            ; p  --> prime
+            (>!! debug [mi ps p])
+            (if-not (= ps -1)
+              ; If we're not being appointed...
+              (do
+                ; Mark composite numbers
+                (mark-composites mi cs ps p my-num chunk)
+                ; Finish follower step
+                (recur))
+                ; If we're being appointed...
+              (do
+                (>!! debug "new lead")
+                (println "Appointed as new lead.")
+                (sieve-e my-num true (chan 100) chunk clients debug)))))))))
+
+(defn dis-sieve-e
+  [num-machines n]
+  (let [debug (vec (repeat num-machines (chan 100000000)))]
+    (loop [i 1
+           chunks (mapv gen-table (spread-work n num-machines))
+           mach-chans (repeat num-machines (chan (* num-machines n 2)))]
+      (when-not (= i (inc num-machines))
+        (if (= i 1)
+          (do
+            (println "starting lead machine...")
+                                        ;Make a lead machine
+            (sieve-e 1 true (chan 10) (first chunks) mach-chans (first debug))
+            (recur (inc i) (rest chunks) mach-chans))
+          (do
+            (println "starting following machine" i "...")
+            (sieve-e i false (first mach-chans) (first chunks) (rest mach-chans) (get debug (dec i)))
+            (recur (inc i) (rest chunks) (rest mach-chans))))))
+    debug))
