@@ -1,6 +1,6 @@
 (ns mail-sieve-e.sieve
   (:gen-class)
-  (:require [clojure.core.async :refer [>!! <!! chan thread go]]
+  (:require [clojure.core.async :refer [>!! <!! chan thread go timeout]]
             [clojure.string :refer [join]])
   (:import [java.io FileWriter]))
 
@@ -116,13 +116,11 @@
 (defn sieve-e
   "Parallel sieve of eratosthenes
   Takes: my-num      - this machine's number
-         bounds      - vector of [lower-bound upper-bound]
          lead?       - boolean value if lead or not
          in-channel  - Merged channel of all messages sent to this machine
-         chunk-in    - If there's a previously made chunk, pass it.
-         & clients   - list of connected clients"
-  [my-num lead? in-channel chunk [& clients] debug]
-  (>!! debug "hiq")
+         chunk       - If there's a previously made chunk, pass it.
+         out-channel - channel to write to"
+  [my-num lead? in-channel chunk out-channel]
   (println "Generating chunk...")
   (let [cs (count chunk)]
     (println "Starting Sieve...")
@@ -134,9 +132,10 @@
           (if-not (nil? n-start)
             ; if n-start is nil, we've run out of primes.
             (do
-              ;(println "start: " start)
+              (println "start: " start)
               ; Send prime to connected clients
-              (doall (map #(>!! % [my-num start prime]) clients))
+              (>!! out-channel [my-num start prime])
+              (<!! (timeout 200))
               ; Mark the primes
               (mark-composites my-num cs start prime my-num chunk)
               ; Complete the step.
@@ -144,21 +143,19 @@
             ; If nil, I need to finish and elect new lead
             (do
               ;Appoint the next machine as lead.
-              (println "appointing " (inc my-num) " as next machine.")
-              (>!! (first clients) [my-num -1 0])
+              (println "appointing" (inc my-num) "as next machine.")
+              (>!! out-channel [my-num -1 0])
               ; Then finish the sieve
               (finish chunk my-num)))))
       ; Follower logic
       (do
         (println "Following lead computer...")
-        (>!! debug "following")
         (loop []
           ; Wait for other machines to give num
           (when-let [[mi ps p] (<!! in-channel)]
             ; when mi = -1, that's the code to appoint this machine as lead.
             ; ps --> start
             ; p  --> prime
-            (>!! debug [mi ps p])
             (if-not (= ps -1)
               ; If we're not being appointed...
               (do
@@ -166,11 +163,14 @@
                 (mark-composites mi cs ps p my-num chunk)
                 ; Finish follower step
                 (recur))
-                ; If we're being appointed...
+              ; If we're being appointed...
               (do
-                (>!! debug "new lead")
-                (println "Appointed as new lead.")
-                (sieve-e my-num true (chan 100) chunk clients debug)))))))))
+                (println [mi ps p] " &")
+                (println "appointed gate")
+                (when (= mi (dec my-num))
+                  (do
+                    (println "Appointed as new lead.")
+                    (sieve-e my-num true (chan 100) chunk out-channel)))))))))))
 
 (defn dis-sieve-e
   [num-machines n]
