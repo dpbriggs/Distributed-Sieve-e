@@ -101,9 +101,9 @@
                   (recur))
                 (.close sock)))))))
     (go-loop []
-      (when-not running?
-        (.close server-socket))
-      (recur))
+      (if-not running?
+        (.close server-socket)
+        (recur)))
     {:server-socket server-socket
      :running running?
      :connected connected}))
@@ -167,6 +167,7 @@
     (do
       (>!! send-chan 0)
       (reset! (:running server) false)
+      (a/close! send-chan)
       (.close (:server-socket server)))
     (println "Sieve completed!")))
 
@@ -184,7 +185,8 @@
         (println "Waiting for kill signal...")
         (while (not= 0 (<!! (:in lead)))
           (<!! (timeout 50)))
-        (.close (:socket lead))
+        (do (a/close! (:in lead))
+            (a/close! (:out lead)))
         (println "Done!")))))
 
 (defn -main
