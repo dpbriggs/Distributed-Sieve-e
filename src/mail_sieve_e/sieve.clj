@@ -103,7 +103,7 @@
          (for [i primes]
            (.write w (str (clojure.string/join ", " i) new-line)))))
       (println "Done!")
-      (println "Primes saved in:" file-name)
+      (println "Primes saved in:" file-name "\n")
       (println ""))))
 
 (defn find-first-prime
@@ -164,7 +164,7 @@
               ; If we're being appointed...
               (if (= mi (dec my-num))
                 (do
-                  (println "Appointed as new lead.")
+                  (println "Appointed as new lead.\n")
                   (sieve-e my-num true (chan 100) chunk out-channel))
                 (recur)))))))))
 

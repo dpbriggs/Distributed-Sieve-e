@@ -53,9 +53,11 @@
   (let [read-chan (chan 1e18)
         reader (io/reader socket)]
     (go-loop []
-      (let [msg-in (.readLine reader)]
-        (when-not (empty? msg-in)
-          (>!! read-chan (read-string msg-in))))
+      (try
+        (let [msg-in (.readLine reader)]
+          (when-not (empty? msg-in)
+            (>!! read-chan (read-string msg-in))))
+        (catch Exception e (str "Socket closed.")))
       (recur))
     read-chan))
 
@@ -88,18 +90,19 @@
   (let [running?      (atom true)
         connected     (atom [])
         server-socket (ServerSocket. port)]
-    (go
-      (while @running?
-        (when-let [sock (.accept server-socket)]
-          (swap! connected conj sock)
-          (let [client-in (read-handler sock)]
-            (go-loop []
-              (if @running?
-                (do
-                  (alt! [client-in] ([msg] (write sock (@handler msg)))
-                        [send-chan] ([msg] (send-to-all connected msg)))
-                  (recur))
-                (.close sock)))))))
+    (try
+      (go
+        (while @running?
+          (when-let [sock (.accept server-socket)]
+            (swap! connected conj sock)
+            (let [client-in (read-handler sock)]
+              (go-loop []
+                (when @running?
+                  (do
+                    (alt! [client-in] ([msg] (write sock (@handler msg)))
+                          [send-chan] ([msg] (send-to-all connected msg)))
+                    (recur))))))))
+      (catch Exception e nil))
     (go-loop []
       (if-not running?
         (.close server-socket)
@@ -167,6 +170,7 @@
     (do
       (>!! send-chan 0)
       (reset! (:running server) false)
+      (mapv #(.close %) connected)
       (a/close! send-chan)
       (.close (:server-socket server)))
     (println "Sieve completed!")))
@@ -176,7 +180,7 @@
   (println "connecting to host...")
   (let [lead (connect host port)]
     (println "connected to host!\n")
-    (println "waiting for all other computers to connect...")
+    (println "waiting for all other computers to connect...\n")
     (let [my-num (<!! (:in lead))
           bounds (<!! (:in lead))
           chunk  (s/gen-table bounds)]
