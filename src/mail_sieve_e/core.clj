@@ -54,7 +54,7 @@
         reader (io/reader socket)]
     (go-loop []
       (let [msg-in (.readLine reader)]
-        (when-not (= msg-in "")
+        (when-not (empty? msg-in)
           (>!! read-chan (read-string msg-in))))
       (recur))
     read-chan))
@@ -67,7 +67,6 @@
       (when-let [msg (<! write-chan)]
         (when-not (nil? msg)
           (do
-            (println "writing: " msg)
             (.write writer (str msg "\n"))
             (.flush writer)))
         (recur)))
@@ -123,9 +122,8 @@
   and lead must send these to the right computers."
   [connections done? prime-vec]
   (let [[mi ps p] prime-vec
-        r-comps (drop (dec mi) connections)
-        appoint? (= ps -1)
-        _ (println prime-vec)]         ; computers we actually have to send the nums to
+        r-comps (drop (dec mi) connections) ; computers we actually have to send the nums to
+        appoint? (= ps -1)]
     ; Send prime-vec
     (mapv #(write % prime-vec) r-comps)
     ; Check if it's an appoint signal
@@ -135,9 +133,7 @@
     ; ex machine 1 appoints machine two, [m1 m2 m3...], m2 at index 1
     (when (and appoint?
                (= (count connections) (dec mi)))
-      (println "when gate &&&&&")
-      (reset! done? true)
-      )))
+      (reset! done? true))))
 
 (defn lead-start
   [num-expected num-primes port]
@@ -164,11 +160,10 @@
     ; Now we can start the sieve
     (s/sieve-e 1 true (chan 10) lead-chunk send-chan)
     (println "Waiting for other machines to finish...\n")
-    (println (.isClosed (:server-socket server)))
     (while (not @done?)
       (<!! (timeout 500)))
     ; shut down server
-    (println "Shutting down server...")
+    (println "Shutting down server...\n")
     (do
       (>!! send-chan 0)
       (reset! (:running server) false)
@@ -189,6 +184,7 @@
         (println "Waiting for kill signal...")
         (while (not= 0 (<!! (:in lead)))
           (<!! (timeout 50)))
+        (.close (:socket lead))
         (println "Done!")))))
 
 (defn -main

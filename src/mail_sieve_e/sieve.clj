@@ -132,10 +132,8 @@
           (if-not (nil? n-start)
             ; if n-start is nil, we've run out of primes.
             (do
-              (println "start: " start)
               ; Send prime to connected clients
               (>!! out-channel [my-num start prime])
-              (<!! (timeout 200))
               ; Mark the primes
               (mark-composites my-num cs start prime my-num chunk)
               ; Complete the step.
@@ -164,13 +162,11 @@
                 ; Finish follower step
                 (recur))
               ; If we're being appointed...
-              (do
-                (println [mi ps p] " &")
-                (println "appointed gate")
-                (when (= mi (dec my-num))
-                  (do
-                    (println "Appointed as new lead.")
-                    (sieve-e my-num true (chan 100) chunk out-channel)))))))))))
+              (if (= mi (dec my-num))
+                (do
+                  (println "Appointed as new lead.")
+                  (sieve-e my-num true (chan 100) chunk out-channel))
+                (recur)))))))))
 
 (defn dis-sieve-e
   [num-machines n]
