@@ -151,7 +151,7 @@
         (println "Following lead computer...")
         (loop []
           ; Wait for other machines to give num
-          (when-let [[mi ps p] (<!! in-channel)]
+          (when-let [[mi ps p] (mapv int (<!! in-channel))]
             ; when mi = -1, that's the code to appoint this machine as lead.
             ; ps --> start
             ; p  --> prime

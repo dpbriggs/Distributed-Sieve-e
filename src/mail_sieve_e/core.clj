@@ -185,8 +185,8 @@
   (let [lead (connect host port)]
     (println "connected to host!\n")
     (println "waiting for all other computers to connect...\n")
-    (let [my-num (<!! (:in lead))
-          bounds (<!! (:in lead))
+    (let [my-num (int(<!! (:in lead)))
+          bounds (mapv int (<!! (:in lead)))
           chunk  (s/gen-table bounds)]
       (when-let [start? (<!! (:in lead))]
         (s/sieve-e my-num false (:in lead) chunk (:out lead))
