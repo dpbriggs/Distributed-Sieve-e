@@ -8,8 +8,6 @@
   (:import [java.net Socket ServerSocket]
            [java.io PrintWriter InputStreamReader BufferedReader]))
 
-; TODO: Fix bug that prevents machines with number > 2 to fail
-
 (declare read-handler write-handler)
 
 (defn connect
@@ -44,11 +42,14 @@
     (.flush writer)))
 
 (defn send-to-all
+  "Sends a msg to all connected machines"
   [connected msg]
   (doall
    (map #(write % msg) @connected)))
 
 (defn read-handler
+  "Given a socket and returns a channel which is populated
+  with all of information coming from that socket"
   [socket]
   (let [read-chan (chan 1e18)
         reader (io/reader socket)]
@@ -62,6 +63,8 @@
     read-chan))
 
 (defn write-handler
+  "Given a socket it returns a channel which writes to the socket
+  whatever is put into the channel"
   [socket]
   (let [write-chan (chan 1e18)
         writer (io/writer socket)]
@@ -74,18 +77,11 @@
         (recur)))
     write-chan))
 
-(defn echo-server
-  [port handler]
-  (with-open [server-sock (ServerSocket. port)
-              sock (.accept server-sock)]
-    (let [msg-in  (receive sock)
-          msg-out (handler msg-in)]
-      (write sock msg-out))))
-
 (defn async-echo-server
   "Takes: port      - port number
           handler   - a atom of a function that takes msgs from connected clients
-          send-chan - A channel to immediately send information"
+          send-chan - A channel to immediately send information
+  and starts an ayncronous server which handles all connections"
   [port handler send-chan]
   (let [running?      (atom true)
         connected     (atom [])
@@ -112,6 +108,9 @@
      :connected connected}))
 
 (defn wait-for-clients
+  "Given a num-expected number of machines to connect
+  and the list of currently connected computers waits until
+  the expected number of computers connect."
   [num-expected connected]
   ; First, wait for all computers to join
   (println "Waiting for computers to join...")
@@ -139,6 +138,9 @@
       (reset! done? true))))
 
 (defn lead-start
+  "Given: num-expected - number of machines to run on the network
+          num-primes   - number to find all primes underneath
+          port         - port to listen on"
   [num-expected num-primes port]
   (let [send-chan  (chan 10000000)
         handler    (atom #(.toUpperCase %))
@@ -169,6 +171,7 @@
     (println "Shutting down server...\n")
     (do
       (>!! send-chan 0)
+      (<!! (timeout 200))
       (reset! (:running server) false)
       (mapv #(.close %) connected)
       (a/close! send-chan)
@@ -176,6 +179,7 @@
     (println "Sieve completed!")))
 
 (defn client-start
+  "Starts a following process listening on host:port"
   [host port]
   (println "connecting to host...")
   (let [lead (connect host port)]
@@ -194,7 +198,7 @@
         (println "Done!")))))
 
 (defn -main
-  "I don't do a whole lot ... yet."
+  "Distributed implementation of the Sieve of Eratosthenes"
   ([num-comps num-primes port]
    (lead-start (Integer. num-comps) (Integer. num-primes) (Integer. port)))
   ([host port]

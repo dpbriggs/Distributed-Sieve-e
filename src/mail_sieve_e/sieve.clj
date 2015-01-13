@@ -85,26 +85,27 @@
 (defn finish
   [raw-chunk my-num]
   (println "Writing primes to file...")
-  (let [chunk (persistent! raw-chunk)]
-    (when (= 3 (first chunk))
-      ; Dirty hack to get the number two in the first chunk.
-      ; Basically move 7 into the space where 9 was, and move the other primes.
-      ; [3 5 7 0 ...] --> [2 3 5 7 ...]
-      (assoc chunk 3 7)
-      (assoc chunk 2 5)
-      (assoc chunk 1 3)
-      (assoc chunk 0 2))
-    (let [new-line (System/getProperty "line.separator")
-          file-name (str (System/getProperty "user.home") "/primes" my-num ".txt")
-          filtered-chunk (filter #(not (zero? %)) chunk)
-          primes (partition-all 10 filtered-chunk)]
-      (with-open [w (FileWriter. file-name)]
-        (doall
-         (for [i primes]
-           (.write w (str (clojure.string/join ", " i) new-line)))))
-      (println "Done!")
-      (println "Primes saved in:" file-name "\n")
-      (println ""))))
+  (when (= 1 my-num)
+    ; Dirty hack to get the number two in the first chunk.
+    ; Basically move 7 into the space where 9 was, and move the other primes.
+    ; [3 5 7 0 ...] --> [2 3 5 7 ...]
+    (do
+      (assoc! raw-chunk 3 7.0)
+      (assoc! raw-chunk 2 5.0)
+      (assoc! raw-chunk 1 3.0)
+      (assoc! raw-chunk 0 2.0)))
+  (let [chunk (persistent! raw-chunk)
+        new-line (System/getProperty "line.separator")
+        file-name (str (System/getProperty "user.home") "/primes" my-num ".txt")
+        filtered-chunk (filter #(not (zero? %)) chunk)
+        primes (partition-all 10 filtered-chunk)]
+    (with-open [w (FileWriter. file-name)]
+      (doall
+       (for [i primes]
+         (.write w (str (clojure.string/join ", " i) new-line)))))
+    (println "Done!")
+    (println "Primes saved in:" file-name "\n")
+    (println "")))
 
 (defn find-first-prime
   [coll cs]
