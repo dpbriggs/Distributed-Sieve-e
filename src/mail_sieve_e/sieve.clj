@@ -4,13 +4,11 @@
             [clojure.string :refer [join]])
   (:import [java.io FileWriter]))
 
-
-;; TODO: Fix follower sieve-e
-(def chunk-size (atom 0))
-
-(def comp-num (atom 0))
+;; Main logic for the sieve
 
 (defn gen-table
+  "Given: [lower upper] - lower bound int and upper bound int
+  produces a transient vector between those ranges skip counting by 2"
   [[lower upper]]
   (transient (vec (range lower upper 2))))
 
@@ -83,6 +81,9 @@
         (recur (inc stop))))))
 
 (defn finish
+  "Takes raw-chunk - transient vector of primes to process
+         my-num    - this machines number
+  and writes the contents to a file"
   [raw-chunk my-num]
   (println "Writing primes to file...")
   (when (= 1 my-num)
@@ -108,6 +109,7 @@
     (println "")))
 
 (defn find-first-prime
+  "Find first non-zero number in a chunk"
   [coll cs]
   (if-not (zero? (get coll 0))
     0
@@ -168,22 +170,3 @@
                   (println "Appointed as new lead.\n")
                   (sieve-e my-num true (chan 100) chunk out-channel))
                 (recur)))))))))
-
-(defn dis-sieve-e
-  [num-machines n]
-  (let [debug (vec (repeat num-machines (chan 100000000)))]
-    (loop [i 1
-           chunks (mapv gen-table (spread-work n num-machines))
-           mach-chans (repeat num-machines (chan (* num-machines n 2)))]
-      (when-not (= i (inc num-machines))
-        (if (= i 1)
-          (do
-            (println "starting lead machine...")
-                                        ;Make a lead machine
-            (sieve-e 1 true (chan 10) (first chunks) mach-chans (first debug))
-            (recur (inc i) (rest chunks) mach-chans))
-          (do
-            (println "starting following machine" i "...")
-            (sieve-e i false (first mach-chans) (first chunks) (rest mach-chans) (get debug (dec i)))
-            (recur (inc i) (rest chunks) (rest mach-chans))))))
-    debug))
