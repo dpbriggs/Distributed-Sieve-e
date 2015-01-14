@@ -53,9 +53,8 @@
          coll   - transient collection to mark indices
    Applies sieve marking step to prime chunk"
   [mi cs ps p my-num coll]
-  (let [_ (when (zero? p) (println "p: " p "ps: 0" "mi: " mi "coll: " (take 20 (persistent! coll))))
-        early-indices (* (dec my-num) (Math/floor (/ (- cs ps) p)))
-        to-mark       (drop early-indices (indices mi cs ps p))
+  (let [early-indices (* (dec my-num) (Math/floor (/ (- cs ps) p)))
+        to-mark       (drop (dec early-indices) (indices mi cs ps p))
         lower-bound   (* (dec my-num) cs)
         upper-bound   (dec (* my-num cs))]
     (loop [head (first to-mark)
@@ -122,7 +121,8 @@
          lead?       - boolean value if lead or not
          in-channel  - Merged channel of all messages sent to this machine
          chunk       - If there's a previously made chunk, pass it.
-         out-channel - channel to write to"
+         out-channel - channel to write to
+  And starts the Sieve of Eraosthenes"
   [my-num lead? in-channel chunk out-channel]
   (println "Generating chunk...")
   (let [cs (count chunk)]
