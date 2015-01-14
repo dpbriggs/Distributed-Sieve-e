@@ -12,7 +12,9 @@
 
 (defn connect
   "Takes: server - host ip to connect to
-          port   - port to connect to"
+          port   - port to connect to
+  and returns a map of channels to read/write to
+  and a raw socket"
   [server port]
   (let [socket (Socket. server port)
         in (-> socket
@@ -40,12 +42,6 @@
   (let [writer (io/writer socket)]
     (.write writer (str msg "\n"))
     (.flush writer)))
-
-(defn send-to-all
-  "Sends a msg to all connected machines"
-  [connected msg]
-  (doall
-   (map #(write % msg) @connected)))
 
 (defn read-handler
   "Given a socket and returns a channel which is populated
@@ -96,7 +92,7 @@
                 (when @running?
                   (do
                     (alt! [client-in] ([msg] (write sock (@handler msg)))
-                          [send-chan] ([msg] (send-to-all connected msg)))
+                          [send-chan] ([msg] (doall (map #(write % msg) @connected))))
                     (recur))))))))
       (catch Exception e nil))
     (go-loop []
@@ -161,7 +157,8 @@
                  bounds  (get chunks (inc mi))]] ; first chunk is for lead
        (do
          (write machine (+ mi 2))
-         (write machine bounds))))
+         (write machine bounds)
+         (write machine 1))))
     ; Now we can start the sieve
     (s/sieve-e 1 true (chan 10) lead-chunk send-chan)
     (println "Waiting for other machines to finish...\n")
@@ -170,8 +167,11 @@
     ; shut down server
     (println "Shutting down server...\n")
     (do
+      ; send kill signal
       (>!! send-chan 0)
+      ; wait for machines to recieve signal
       (<!! (timeout 200))
+      ; shutdown various parts
       (reset! (:running server) false)
       (mapv #(.close %) connected)
       (a/close! send-chan)
@@ -182,19 +182,26 @@
   "Starts a following process listening on host:port"
   [host port]
   (println "connecting to host...")
+  ; first connect to lead computer
   (let [lead (connect host port)]
     (println "connected to host!\n")
     (println "waiting for all other computers to connect...\n")
+    ; recieve machine number and bounds while conveniently waiting for lead to send info
     (let [my-num (int(<!! (:in lead)))
           bounds (mapv int (<!! (:in lead)))
           chunk  (s/gen-table bounds)]
+      ; wait for start signal
       (when-let [start? (<!! (:in lead))]
+        ; run sieve listening on lead channels
         (s/sieve-e my-num false (:in lead) chunk (:out lead))
+        ; then wait for kill signal
         (println "Waiting for kill signal...")
         (while (not= 0 (<!! (:in lead)))
           (<!! (timeout 50)))
+        ; Then close the channels and socket
         (do (a/close! (:in lead))
-            (a/close! (:out lead)))
+            (a/close! (:out lead))
+            (.close (:socket lead)))
         (println "Done!")))))
 
 (defn -main
