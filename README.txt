@@ -11,7 +11,7 @@ Custom implementation of the Sieve of Eratosthenes (https://en.wikipedia.org/wik
 
 Description --
 
-This Sieve is designed to be able to commute primes between several machines (over the internet). 
+This Sieve is designed to be able to compute primes between several machines (over the internet). 
 
 Rather than listing all of the natural numbers, this sieve starts at 3 and skip counts by two. Each machine recieves an evenly sized chunk to process. If we wanted to compute the primes below 10000 between two machines, each machine would compute chunks of size 5000 (due to optimizations this is lowered to ~2500).
 
